@@ -1,110 +1,100 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, TouchableOpacity, Platform, TextInput, ActivityIndicator, SafeAreaView, KeyboardAvoidingView } from 'react-native';
+import { StyleSheet, View, TouchableOpacity, Platform, TextInput, ActivityIndicator, SafeAreaView, KeyboardAvoidingView, Switch } from 'react-native';
 import { Text } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Theme } from '@/constants/Theme';
-import { usePlacesAutocomplete } from '@/hooks/usePlacesAutocomplete';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import * as Location from 'expo-location';
 
 interface PlacePrediction {
-  place_id: string;
-  description: string;
-  structured_formatting: {
-    main_text: string;
-    secondary_text: string;
-  };
+  place_id: number;
+  display_name: string;
+  lat: number;
+  lon: number;
+  type: string;
 }
 
 export default function SearchScreen() {
+  const [currentLocation, setCurrentLocation] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [destination, setDestination] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [predictions, setPredictions] = useState<PlacePrediction[]>([]);
+  const [useCurrentLocation, setUseCurrentLocation] = useState(false);
   const router = useRouter();
   const params = useLocalSearchParams<{ 
     currentLocation?: string;
-    onSelect?: string; // Callback route to navigate to after selection
+    onSelect?: string;
   }>();
-  const { predictions, isLoading, fetchPredictions } = usePlacesAutocomplete();
 
   useEffect(() => {
-    console.log('Search query changed:', searchQuery);
-    if (searchQuery.length >= 2) {
-      console.log('Triggering search');
-      const timer = setTimeout(() => {
-        fetchPredictions(searchQuery);
-      }, 300);
-      return () => clearTimeout(timer);
-    } else {
-      console.log('Clearing predictions (query too short)');
-      fetchPredictions('');
+    getCurrentLocation();
+  }, []);
+
+  const getCurrentLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        console.log('Permission to access location was denied');
+        return;
+      }
+
+      const location = await Location.getCurrentPositionAsync({});
+      const { latitude, longitude } = location.coords;
+      
+      // Reverse geocode to get address
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=18&addressdetails=1`
+      );
+      const data = await response.json();
+      setCurrentLocation(data.display_name);
+    } catch (error) {
+      console.error('Error getting location:', error);
     }
-  }, [searchQuery]);
+  };
 
-  useEffect(() => {
-    console.log('Predictions updated:', predictions);
-  }, [predictions]);
+  const fetchPredictions = async (query: string) => {
+    if (query.length < 2) {
+      setPredictions([]);
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&countrycodes=ve&limit=10`
+      );
+      const data = await response.json();
+      setPredictions(data);
+    } catch (error) {
+      console.error('Error fetching predictions:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleSearchChange = (query: string) => {
-    console.log('Search input changed:', query);
     setSearchQuery(query);
+    fetchPredictions(query);
   };
 
   const handlePlaceSelect = (prediction: PlacePrediction) => {
-    console.log('Place selected:', prediction);
-    
-    // Navigate to the payment screen with the selected location
+    const selectedLocation = useCurrentLocation ? currentLocation : prediction.display_name;
+    const selectedPlaceId = useCurrentLocation ? 'current' : prediction.place_id.toString();
+    const selectedLat = useCurrentLocation ? null : prediction.lat;
+    const selectedLon = useCurrentLocation ? null : prediction.lon;
+
     router.push({
       pathname: '/payment',
       params: {
-        selectedLocation: prediction.structured_formatting.main_text,
-        placeId: prediction.place_id,
-        fullAddress: prediction.description
+        selectedLocation: selectedLocation,
+        placeId: selectedPlaceId,
+        fullAddress: selectedLocation,
+        lat: selectedLat,
+        lon: selectedLon,
+        isCurrentLocation: useCurrentLocation.toString()
       }
     });
-  };
-
-  const getCurrentLocation = () => {
-    return params.currentLocation || 'Selecciona una ubicación';
-  };
-
-  const renderPredictions = () => {
-    if (isLoading) {
-      return (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Theme.colors.primary} />
-        </View>
-      );
-    }
-
-    if (predictions.length === 0 && searchQuery.length >= 2) {
-      return (
-        <View style={styles.noResultsContainer}>
-          <Text style={styles.noResultsText}>No se encontraron resultados</Text>
-        </View>
-      );
-    }
-
-    return predictions.map((prediction: PlacePrediction) => (
-      <TouchableOpacity
-        key={prediction.place_id}
-        style={styles.resultItem}
-        onPress={() => handlePlaceSelect(prediction)}
-      >
-        <View style={styles.resultIconContainer}>
-          <MaterialCommunityIcons 
-            name="map-marker" 
-            size={16} 
-            color={Theme.colors.textSecondary} 
-          />
-        </View>
-        <View style={styles.resultTextContainer}>
-          <Text style={styles.mainText} numberOfLines={1}>
-            {prediction.structured_formatting.main_text}
-          </Text>
-          <Text style={styles.secondaryText} numberOfLines={1}>
-            {prediction.structured_formatting.secondary_text}
-          </Text>
-        </View>
-      </TouchableOpacity>
-    ));
   };
 
   return (
@@ -124,54 +114,117 @@ export default function SearchScreen() {
               color={Theme.colors.text} 
             />
           </TouchableOpacity>
-          <View style={styles.currentLocationContainer}>
-            <MaterialCommunityIcons 
-              name="map-marker" 
-              size={16} 
-              color="#4CAF50"
-              style={styles.locationIcon} 
-            />
-            <Text numberOfLines={1} style={styles.currentLocationText}>
-              {getCurrentLocation()}
-            </Text>
-          </View>
         </View>
 
         <View style={styles.searchContainer}>
-          <View style={styles.searchBar}>
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Buscar ubicación..."
-              placeholderTextColor={Theme.colors.textSecondary}
-              value={searchQuery}
-              onChangeText={handleSearchChange}
-              autoFocus
-              returnKeyType="search"
+          <View style={styles.locationInput}>
+            <MaterialCommunityIcons 
+              name="map-marker" 
+              size={20} 
+              color="#4CAF50"
+              style={styles.locationIcon} 
             />
-            {isLoading ? (
-              <ActivityIndicator 
-                size="small" 
-                color={Theme.colors.primary}
-                style={styles.loader} 
-              />
-            ) : searchQuery ? (
-              <TouchableOpacity 
-                style={styles.clearButton}
-                onPress={() => setSearchQuery('')}
-              >
-                <MaterialCommunityIcons 
-                  name="close" 
-                  size={20} 
-                  color={Theme.colors.textSecondary} 
-                />
-              </TouchableOpacity>
-            ) : null}
+            <TextInput
+              style={styles.locationText}
+              value={currentLocation}
+              placeholder="Current Location"
+              placeholderTextColor={Theme.colors.textSecondary}
+              editable={false}
+            />
           </View>
+
+          <View style={styles.toggleContainer}>
+            <Text style={styles.toggleLabel}>Use current location for delivery</Text>
+            <Switch
+              value={useCurrentLocation}
+              onValueChange={setUseCurrentLocation}
+              trackColor={{ false: Theme.colors.border, true: Theme.colors.primary }}
+              thumbColor={useCurrentLocation ? Theme.colors.primary : Theme.colors.textSecondary}
+            />
+          </View>
+
+          {!useCurrentLocation && (
+            <View style={styles.searchBar}>
+              <MaterialCommunityIcons 
+                name="map-marker-outline" 
+                size={20} 
+                color={Theme.colors.textSecondary}
+                style={styles.searchIcon} 
+              />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Enter delivery address"
+                placeholderTextColor={Theme.colors.textSecondary}
+                value={searchQuery}
+                onChangeText={handleSearchChange}
+                autoFocus
+                returnKeyType="search"
+              />
+              {isLoading ? (
+                <ActivityIndicator 
+                  size="small" 
+                  color={Theme.colors.primary}
+                  style={styles.loader} 
+                />
+              ) : searchQuery ? (
+                <TouchableOpacity 
+                  style={styles.clearButton}
+                  onPress={() => setSearchQuery('')}
+                >
+                  <MaterialCommunityIcons 
+                    name="close" 
+                    size={20} 
+                    color={Theme.colors.textSecondary} 
+                  />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          )}
+
+          {useCurrentLocation && (
+            <TouchableOpacity
+              style={styles.confirmButton}
+              onPress={() => handlePlaceSelect({} as PlacePrediction)}
+            >
+              <Text style={styles.confirmButtonText}>Confirm Current Location</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
-        <View style={styles.resultsContainer}>
-          {renderPredictions()}
-        </View>
+        {!useCurrentLocation && (
+          <View style={styles.resultsContainer}>
+            {isLoading ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color={Theme.colors.primary} />
+              </View>
+            ) : predictions.length === 0 && searchQuery.length >= 2 ? (
+              <View style={styles.noResultsContainer}>
+                <Text style={styles.noResultsText}>No se encontraron resultados</Text>
+              </View>
+            ) : (
+              predictions.map((prediction) => (
+                <TouchableOpacity
+                  key={prediction.place_id}
+                  style={styles.resultItem}
+                  onPress={() => handlePlaceSelect(prediction)}
+                >
+                  <View style={styles.resultIconContainer}>
+                    <MaterialCommunityIcons 
+                      name="map-marker" 
+                      size={16} 
+                      color={Theme.colors.textSecondary} 
+                    />
+                  </View>
+                  <View style={styles.resultTextContainer}>
+                    <Text style={styles.mainText} numberOfLines={1}>
+                      {prediction.display_name}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              ))
+            )}
+          </View>
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -193,25 +246,43 @@ const styles = StyleSheet.create({
     padding: 8,
     marginRight: 8,
   },
-  currentLocationContainer: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  locationIcon: {
-    marginRight: 4,
-  },
-  currentLocationText: {
-    fontSize: 16,
-    color: Theme.colors.text,
-    fontWeight: '500',
-    flex: 1,
-  },
   searchContainer: {
     paddingHorizontal: 16,
     paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: Theme.colors.border,
+  },
+  locationInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Theme.colors.surface,
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    height: 44,
+    marginBottom: 8,
+  },
+  locationIcon: {
+    marginRight: 8,
+  },
+  locationText: {
+    flex: 1,
+    fontSize: 16,
+    color: Theme.colors.text,
+  },
+  toggleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: Theme.colors.surface,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  toggleLabel: {
+    fontSize: 16,
+    color: Theme.colors.text,
+    flex: 1,
   },
   searchBar: {
     flexDirection: 'row',
@@ -220,6 +291,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingLeft: 16,
     height: 44,
+  },
+  searchIcon: {
+    marginRight: 8,
   },
   searchInput: {
     flex: 1,
@@ -278,8 +352,17 @@ const styles = StyleSheet.create({
     color: Theme.colors.text,
     marginBottom: 2,
   },
-  secondaryText: {
-    fontSize: 14,
-    color: Theme.colors.textSecondary,
+  confirmButton: {
+    backgroundColor: Theme.colors.primary,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  confirmButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
 }); 
