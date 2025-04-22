@@ -2,14 +2,15 @@ import { Colors } from './Colors';
 
 export const Theme = {
   colors: {
-    primary: '#000000',
+    primary: '#4CAF50',
     background: '#FFFFFF',
-    surface: '#F8F8F8',
+    surface: '#F5F5F5',
     text: '#000000',
-    textSecondary: '#6B6B6B',
+    textSecondary: '#666666',
     border: '#E0E0E0',
     error: '#B00020',
     success: '#4CAF50',
+    disabled: '#9E9E9E',
   },
   spacing: {
     xs: 4,

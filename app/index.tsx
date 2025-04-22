@@ -1,11 +1,13 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Dimensions, ScrollView, TouchableOpacity, ViewStyle, TextStyle, Platform } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { StyleSheet, View, Dimensions, ScrollView, TouchableOpacity, ViewStyle, TextStyle, Platform, ActivityIndicator } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
 import * as Location from 'expo-location';
-import { Button, Portal, Text, TextInput, Searchbar, Card, IconButton, Surface } from 'react-native-paper';
+import { Button, Portal, Text, TextInput, Searchbar, Card, IconButton, Surface, Modal } from 'react-native-paper';
 import { Theme } from '@/constants/Theme';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import { usePlacesAutocomplete } from '@/hooks/usePlacesAutocomplete';
+import { MapConfig } from '@/constants/MapConfig';
 
 interface WaterTruck {
   id: string;
@@ -62,8 +64,12 @@ const mockTrucks: WaterTruck[] = [
 
 export default function MapScreen() {
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [mapRegion, setMapRegion] = useState(MapConfig.defaultRegion);
+  const [selectedLocation, setSelectedLocation] = useState('');
+  const mapRef = useRef<MapView>(null);
   const router = useRouter();
+  const params = useLocalSearchParams();
+  const { predictions, isLoading, fetchPredictions, getPlaceDetails } = usePlacesAutocomplete();
 
   useEffect(() => {
     (async () => {
@@ -73,8 +79,75 @@ export default function MapScreen() {
       }
       let location = await Location.getCurrentPositionAsync({});
       setLocation(location);
+      setMapRegion({
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        latitudeDelta: 0.0922,
+        longitudeDelta: 0.0421,
+      });
     })();
   }, []);
+
+  useEffect(() => {
+    if (params.placeId && params.description) {
+      handleLocationSelect(params.placeId as string, params.description as string);
+    }
+  }, [params]);
+
+  const handleLocationSelect = async (placeId: string, description: string) => {
+    const location = await getPlaceDetails(placeId);
+    if (location) {
+      setMapRegion({
+        ...mapRegion,
+        latitude: location.latitude,
+        longitude: location.longitude,
+      });
+      mapRef.current?.animateToRegion({
+        latitude: location.latitude,
+        longitude: location.longitude,
+        latitudeDelta: 0.0922,
+        longitudeDelta: 0.0421,
+      }, 1000);
+      setSelectedLocation(description);
+    }
+  };
+
+  const handleSearchChange = (query: string) => {
+    if (query.length >= 2) {
+      fetchPredictions(query);
+    }
+  };
+
+  const handlePlaceSelect = async (placeId: string, description: string) => {
+    const location = await getPlaceDetails(placeId);
+    if (location) {
+      setMapRegion({
+        ...mapRegion,
+        latitude: location.latitude,
+        longitude: location.longitude,
+      });
+      mapRef.current?.animateToRegion({
+        latitude: location.latitude,
+        longitude: location.longitude,
+        latitudeDelta: 0.0922,
+        longitudeDelta: 0.0421,
+      }, 1000);
+    }
+    setSelectedLocation(description);
+  };
+
+  const renderPrediction = (prediction: any) => (
+    <TouchableOpacity
+      key={prediction.place_id}
+      style={styles.predictionItem}
+      onPress={() => handlePlaceSelect(prediction.place_id, prediction.description)}>
+      <MaterialCommunityIcons name="map-marker" size={24} color={Theme.colors.primary} />
+      <View style={styles.predictionText}>
+        <Text style={styles.mainText}>{prediction.structured_formatting.main_text}</Text>
+        <Text style={styles.secondaryText}>{prediction.structured_formatting.secondary_text}</Text>
+      </View>
+    </TouchableOpacity>
+  );
 
   const renderTruckOption = (truck: WaterTruck) => (
     <TouchableOpacity key={truck.id} onPress={() => {}}>
@@ -97,25 +170,20 @@ export default function MapScreen() {
   return (
     <View style={styles.container}>
       <MapView
+        ref={mapRef}
         style={styles.map}
         provider={Platform.select({
-          ios: undefined, // Use Apple Maps on iOS
-          android: 'google', // Use Google Maps on Android
+          ios: undefined,
+          android: 'google',
         })}
         showsUserLocation
         showsMyLocationButton
-        initialRegion={{
-          latitude: location?.coords.latitude || 37.78825,
-          longitude: location?.coords.longitude || -122.4324,
-          latitudeDelta: 0.0922,
-          longitudeDelta: 0.0421,
-        }}>
+        region={mapRegion}>
         {mockTrucks.map((truck) => (
           <Marker
             key={truck.id}
             coordinate={truck.location}
-            onPress={() => {}}
-          >
+            onPress={() => {}}>
             <View style={styles.markerContainer}>
               <MaterialCommunityIcons name="truck-cargo-container" size={24} color={Theme.colors.primary} />
             </View>
@@ -124,10 +192,14 @@ export default function MapScreen() {
       </MapView>
 
       <View style={styles.searchContainer}>
-        <TouchableOpacity style={styles.searchBar} onPress={() => {}}>
+        <TouchableOpacity 
+          style={styles.searchBar} 
+          onPress={() => router.push('/search')}>
           <View style={styles.searchInputContainer}>
             <MaterialCommunityIcons name="magnify" size={24} color={Theme.colors.primary} />
-            <Text style={styles.searchText}>Where to?</Text>
+            <Text style={[styles.searchText, selectedLocation ? styles.searchTextActive : {}]}>
+              {selectedLocation || "Enter pickup location"}
+            </Text>
           </View>
           <View style={styles.searchDivider} />
           <View style={styles.locationContainer}>
@@ -135,6 +207,34 @@ export default function MapScreen() {
           </View>
         </TouchableOpacity>
       </View>
+
+      <Portal>
+        <Modal
+          visible={params.placeId !== undefined}
+          onDismiss={() => router.push('/')}
+          contentContainerStyle={styles.searchModal}>
+          <View style={styles.searchInputWrapper}>
+            <MaterialCommunityIcons 
+              name="arrow-left" 
+              size={24} 
+              color={Theme.colors.primary}
+              onPress={() => router.push('/')}
+              style={styles.backButton}
+            />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search location"
+              value={params.description || ''}
+              onChangeText={handleSearchChange}
+              autoFocus
+            />
+            {isLoading && <ActivityIndicator style={styles.loader} />}
+          </View>
+          <ScrollView style={styles.predictionsContainer}>
+            {predictions.map(renderPrediction)}
+          </ScrollView>
+        </Modal>
+      </Portal>
 
       <View style={styles.bottomSheet}>
         <View style={styles.bottomSheetHeader}>
@@ -292,5 +392,54 @@ const styles = StyleSheet.create({
   confirmButtonLabel: {
     fontSize: Theme.typography.body.fontSize,
     fontWeight: '600',
+  } as TextStyle,
+  searchModal: {
+    backgroundColor: Theme.colors.background,
+    flex: 1,
+    marginTop: Platform.OS === 'ios' ? 40 : 0,
+  } as ViewStyle,
+  searchInputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: Theme.spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Theme.colors.border,
+  } as ViewStyle,
+  backButton: {
+    marginRight: Theme.spacing.sm,
+  } as ViewStyle,
+  searchInput: {
+    flex: 1,
+    fontSize: Theme.typography.body.fontSize,
+    height: 40,
+  } as ViewStyle,
+  loader: {
+    marginLeft: Theme.spacing.sm,
+  } as ViewStyle,
+  predictionsContainer: {
+    flex: 1,
+  } as ViewStyle,
+  predictionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: Theme.spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Theme.colors.border,
+  } as ViewStyle,
+  predictionText: {
+    marginLeft: Theme.spacing.md,
+    flex: 1,
+  } as ViewStyle,
+  mainText: {
+    fontSize: Theme.typography.body.fontSize,
+    fontWeight: '500',
+    marginBottom: 2,
+  } as TextStyle,
+  secondaryText: {
+    fontSize: Theme.typography.caption.fontSize,
+    color: Theme.colors.textSecondary,
+  } as TextStyle,
+  searchTextActive: {
+    color: Theme.colors.text,
   } as TextStyle,
 }); 
